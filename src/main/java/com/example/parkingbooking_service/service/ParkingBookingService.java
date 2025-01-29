@@ -2,13 +2,11 @@ package com.example.parkingbooking_service.service;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
-import java.util.Timer;
-import java.util.TimerTask;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import com.example.parkingbooking_service.client.ParkingClient;
@@ -27,71 +25,77 @@ public class ParkingBookingService {
 
     @Autowired
     private ParkingClient parkingClient;
-    
+
     @Autowired
     private UserClient userClient;
 
-    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("hh:mm a");
+    // Scheduler runs every minute to update parking availability
+    @Scheduled(fixedRate = 10000) // Runs every 1 minute
+    public void checkAndToggleParkingAvailability() {
+        System.out.println("Checking expired bookings at: " + LocalTime.now());
 
-    public ParkingBookingService() {
-        scheduleParkingAvailabilityCheck();
-    }
-
-    /**
-     * Schedules a task to check parking availability every 10 seconds.
-     */
-    private void scheduleParkingAvailabilityCheck() {
-        Timer timer = new Timer(true);
-        timer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-                checkAndToggleParkingAvailability();
-            }
-        }, 0, 10 * 1000); // Run every 10 seconds
-    }
-
-    /**
-     * Checks all active parking bookings and toggles parking availability if the end time has passed.
-     */
-    private void checkAndToggleParkingAvailability() {
         List<ParkingBookingEntity> bookings = parkingBookingRepository.findAll();
 
+        // Iterate through all bookings
         for (ParkingBookingEntity booking : bookings) {
             LocalDate bookingDate = booking.getParkingBookingDate();
+            LocalTime startTime = booking.getStartTime();
             LocalTime endTime = booking.getEndTime();
+            ParkingDto parking = parkingClient.getParkingById(booking.getParkingId());
 
-            // Check if the current date and time exceed the booking's end time
-            if (LocalDate.now().isAfter(bookingDate) || 
-                (LocalDate.now().isEqual(bookingDate) && LocalTime.now().isAfter(endTime))) {
+            System.out.println("Checking Booking ID: " + booking.getParkingBookingid() + 
+                               " | Date: " + bookingDate + 
+                               " | Start Time: " + startTime + 
+                               " | End Time: " + endTime);
 
-                // Fetch parking details using the client
-                ParkingDto parking = parkingClient.getParkingById(booking.getParkingId());
-
-                if (!parking.isParkingAvailable()) {
-                    // Update parking availability to true
-                    parking.setParkingAvailable(true);
-                    parkingClient.updateParkingSlot(parking);
-
-                    System.out.println("Parking slot " + parking.getParkingId() + " is now available.");
+            // 1️⃣ Check if the current time is within any booking period for this parking slot
+            boolean isSlotBooked = false;
+            for (ParkingBookingEntity activeBooking : bookings) {
+                if (activeBooking.getParkingId() == booking.getParkingId() &&
+                    LocalDate.now().isEqual(activeBooking.getParkingBookingDate()) &&
+                    (LocalTime.now().isAfter(activeBooking.getStartTime()) && LocalTime.now().isBefore(activeBooking.getEndTime()))) {
+                    isSlotBooked = true;
+                    break;
                 }
+            }
+
+            // If any booking is active, the parking slot should remain unavailable (false)
+            if (isSlotBooked && parking.isParkingAvailable()) {
+                parking.setParkingAvailable(false);
+                parkingClient.updateParkingSlot(parking);
+                System.out.println("Parking slot " + parking.getParkingId() + " is now booked (false).");
+            }
+
+            // 2️⃣ If the current time is past the end time of all bookings, make the parking slot available (true)
+            if (!isSlotBooked && !parking.isParkingAvailable()) {
+                parking.setParkingAvailable(true);
+                parkingClient.updateParkingSlot(parking);
+                System.out.println("Parking slot " + parking.getParkingId() + " is now available (true).");
             }
         }
     }
 
-    /**
-     * Converts time to AM/PM format.
-     *
-     * @param time LocalTime instance
-     * @return Formatted time string
-     */
-    private String formatTime(LocalTime time) {
-        return time.format(TIME_FORMATTER);
-    }
 
-    // Other service methods (create, delete, modify, etc.)
     public ParkingBookingEntity createParkingBooking(ParkingBookingEntity parkingBooking) {
-        // Validate and save logic
-        return parkingBookingRepository.save(parkingBooking);
+        // Save the booking first
+        ParkingBookingEntity createdBooking = parkingBookingRepository.save(parkingBooking);
+
+        // Fetch the parking slot using parkingId
+        ParkingDto parking = parkingClient.getParkingById(parkingBooking.getParkingId());
+
+        // Check if the booking's start time is in the future
+        if (LocalTime.now().isBefore(parkingBooking.getStartTime())) {
+            // If the start time is in the future, do nothing (the parking slot remains available)
+            System.out.println("Parking slot " + parking.getParkingId() + " is available until " + parkingBooking.getStartTime());
+        } else {
+            // If the booking is immediate (i.e., the start time is now or in the past), mark the slot as unavailable
+            if (parking.isParkingAvailable()) {
+                parking.setParkingAvailable(false);
+                parkingClient.updateParkingSlot(parking);
+                System.out.println("Parking slot " + parking.getParkingId() + " is now booked (false).");
+            }
+        }
+        return createdBooking;
     }
 
     public void deleteParkingBooking(int parkingBookingId) {
@@ -106,7 +110,6 @@ public class ParkingBookingService {
         if (existingBookingOpt.isEmpty()) {
             throw new RuntimeException("Booking not found with ID: " + parkingBookingId);
         }
-
         ParkingBookingEntity existingBooking = existingBookingOpt.get();
         existingBooking.setParkingId(updatedBooking.getParkingId());
         existingBooking.setUserId(updatedBooking.getUserId());
@@ -125,28 +128,29 @@ public class ParkingBookingService {
     public List<ParkingBookingEntity> viewAllParkingBookings() {
         return parkingBookingRepository.findAll();
     }
-    
+
     public ParkingBookingResponseDto getParkingBookingWithUserDetails(int bookingId) {
         Optional<ParkingBookingEntity> parkingBookingOpt = parkingBookingRepository.findById(bookingId);
         
         if (parkingBookingOpt.isPresent()) {
             ParkingBookingEntity parkingBooking = parkingBookingOpt.get();
- 
-           
-			UserDto user = userClient.getUserById(parkingBooking.getUserId());
 
+            // Fetch user details
+            UserDto user = userClient.getUserById(parkingBooking.getUserId());
+
+            // Fetch parking details
             ParkingDto parking = parkingClient.getParkingById(parkingBooking.getParkingId());
 
+            // Prepare the response DTO
             ParkingBookingResponseDto response = new ParkingBookingResponseDto();
             response.setParkingBookingid(parkingBooking.getParkingBookingid());
             response.setParkingBookingDate(parkingBooking.getParkingBookingDate());
             response.setStartTime(parkingBooking.getStartTime());
             response.setEndTime(parkingBooking.getEndTime());
-            
             response.setUserId(parkingBooking.getUserId());
             response.setParkingId(parkingBooking.getParkingId());
-            parking.setParkingAvailable(false);
-            parkingClient.updateParkingSlot(parking);
+
+            // Set the user and parking details in the response
             response.setUser(user);
             response.setParking(parking);
 

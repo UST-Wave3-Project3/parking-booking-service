@@ -7,7 +7,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import com.example.parkingbooking_service.dto.ParkingDto;
-import com.example.parkingbooking_service.dto.ParkingEntity;
 
 @FeignClient(name = "parking-service", url = "http://localhost:3333/api/parkings")
 public interface ParkingClient {
