@@ -61,6 +61,7 @@ public class ParkingBookingController {
         return ResponseEntity.ok(bookings);
     }
     
+    // View Parking Booking with User and Parking Details
     @GetMapping("/{parkingBookingId}")
     public ParkingBookingResponseDto getParkingBookingWithUserDetails(@PathVariable int parkingBookingId) {
         return parkingBookingService.getParkingBookingWithUserDetails(parkingBookingId);
